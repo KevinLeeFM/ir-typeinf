@@ -11,11 +11,11 @@ structure Ptr where
   offset : Nat
 deriving Repr, DecidableEq
 
-abbrev Val := List (Int ⊕ Ptr)
+abbrev Val := Option (List (Int ⊕ Ptr))
 
 structure State where
   assign : Var → Val
-  mem : Addr → Option Val
+  mem : Addr → Val
 
 -- Statement inductive type based on the given grammar
 inductive Stmt where
@@ -60,46 +60,29 @@ def truncType : Nat → IRTypeSyntax → IRTypeSyntax
       .sum (truncType (.succ i) (.prod σ₁ σ₂)) (truncType (.succ i) (.prod ρ₁ ρ₂))
     | _ => .bot
 
--- 0 truncates everything
-def truncValRight : Nat → Val → Val -- FIXME
-  | 0, _ => []
-  | .succ i, v =>
-    match v with
-    | [] => []
-    | e :: vs => e :: truncValRight i vs
-
-#eval truncValRight 2 [Sum.inl 1, Sum.inl 2, Sum.inl 3]
-
-def truncValLeft : Nat → Val → Val -- FIXME
-  | 0, v => v
-  | .succ i, v =>
-    match v with
-    | [] => []
-    | _ :: vs => truncValLeft i vs
-
-#eval truncValLeft 2 [Sum.inl 1, Sum.inl 2, Sum.inl 3]
-
 def TypeDecl := Var → Option IRType
 
 def Prog := TypeDecl × Set Stmt × TypeDecl
 
 def isInt (v : Val) : Prop :=
-  ∃ n : Int, v = [Sum.inl n]
+  ∃ n : Int, v = some [Sum.inl n]
 
 def pointsTo (σ : State) (vp v : Val) : Prop :=
   match v with
-  | [Sum.inr p] =>
-      match (σ.mem p.addr) with
-      | some v' => .extract v' (start := p.offset) = vp
+  | some [Sum.inr p] =>
+      match σ.mem p.addr with
+      | some v' => some (.extract v' (start := p.offset)) = vp
       | none => False
   | _ => False
 
 inductive TypeConcret : State → Val → IRType → Prop where
+  -- Every value belongs to top type
   | top (σ : State) (v : Val) :
     TypeConcret σ v top
 
-  | empty (σ : State) (τ : IRType) :
-    TypeConcret σ [] τ
+  -- None value belongs to every type, including bottom (uninitialized memory)
+  | none (σ : State) (τ : IRType) :
+    TypeConcret σ none τ
 
   | int (σ : State) (v : Val) :
     isInt v →
@@ -110,11 +93,10 @@ inductive TypeConcret : State → Val → IRType → Prop where
     pointsTo σ v_p v →
     TypeConcret σ v_p (ptr τ)
 
-  | prod (σ : State) (v₁ v₂ v : Val) (τ₁ τ₂ : IRType) :
-    TypeConcret σ v₁ τ₁ →
-    TypeConcret σ v₂ τ₂ →
-    v = v₁ ++ v₂ →
-    TypeConcret σ v (prod τ₁ τ₂)
+  | prod (σ : State) (l₁ l₂ : List (Int ⊕ Ptr)) (τ₁ τ₂ : IRType) :
+    TypeConcret σ (some l₁) τ₁ →
+    TypeConcret σ (some l₂) τ₂ →
+    TypeConcret σ (some (l₁ ++ l₂)) (prod τ₁ τ₂)
 
   | sum_left (σ : State) (v : Val) (τ₁ τ₂ : IRType) :
     TypeConcret σ v τ₁ →
@@ -124,11 +106,10 @@ inductive TypeConcret : State → Val → IRType → Prop where
     TypeConcret σ v τ₂ →
     TypeConcret σ v (sum τ₁ τ₂)
 
-  | seq (σ : State) (v_h v_t v : Val) (τ : IRType) :
-    TypeConcret σ v_h τ →
-    TypeConcret σ v_t (seq τ) →
-    v = v_h ++ v_t →
-    TypeConcret σ v (seq τ)
+  | seq (σ : State) (l_h l_t : List (Int ⊕ Ptr)) (τ : IRType) :
+    TypeConcret σ (some l_h) τ →
+    TypeConcret σ (some l_t) (seq τ) →
+    TypeConcret σ (some (l_h ++ l_t)) (seq τ)
 
 def typeDeref : IRTypeSyntax → IRTypeSyntax :=
   fun τ ↦ match τ with
@@ -142,47 +123,50 @@ def writeAssign (σ : State) (v : Val) (x : Var) : State :=
   { assign := fun y ↦ if y = x then v else σ.assign y,
     mem := σ.mem }
 
-def valPatch (l1 l2 : Val) (offset : Nat) :=
-  let (left, rest) := l1.splitAt offset
-  left ++ l2 ++ rest.drop l2.length
+def valPatch (l1 l2 : Val) (offset : Nat) : Val :=
+  match l1, l2 with
+  | some l1', some l2' =>
+      let (left, rest) := l1'.splitAt offset
+      some (left ++ l2' ++ rest.drop l2'.length)
+  | _, _ => l1
 
-#eval valPatch [Sum.inl 1, Sum.inl 2, Sum.inl 3, Sum.inl 4] [Sum.inl 9, Sum.inl 8] 1
-#eval valPatch [Sum.inl 1, Sum.inl 2] [Sum.inl 9, Sum.inl 8] 1
+#eval valPatch (some [Sum.inl 1, Sum.inl 2, Sum.inl 3, Sum.inl 4]) (some [Sum.inl 9, Sum.inl 8]) 1
+#eval valPatch (some [Sum.inl 1, Sum.inl 2]) (some [Sum.inl 9, Sum.inl 8]) 1
 
-def initMem (σ : State) (v : Val) (addr : Addr) : State :=
+def truncValRight (offset : Nat) (v : Val) : Val :=
+  match v with
+  | some l => some (l.drop offset)
+  | none => none
+
+def initMem (σ : State) (addr : Addr) : State :=
   { assign := σ.assign,
-    mem := fun b ↦ if b = addr then some v else σ.mem b }
+    mem := fun b ↦ if b = addr then none else σ.mem b }
 
-def writeMem (σ : State) (v : Val) (p : Ptr) (validP : TypeConcret ) : State :=
+def writeMem (σ : State) (v : Val) (p : Ptr) : State :=
   { assign := σ.assign,
-    mem := fun b ↦ if b = p.addr then (
-      match σ.mem b with
-      | some old_val => some (valPatch old_val v p.offset)
-      | none =>
-    ) else σ.mem b }
+    mem := fun b ↦ if b = p.addr then valPatch (σ.mem b) v p.offset else σ.mem b }
 
 inductive StmtReach : Stmt → State → State → Prop where
-  | alloca (v : Var) (τ : IRTypeSyntax) (σ σ' : State) (a : Addr) (ndv : Val) :
+  | alloca (v : Var) (τ : IRTypeSyntax) (σ σ' : State) (a : Addr) :
     freshAddr σ a →
-    TypeConcret σ ndv (mk (typeDeref τ)) →
-    -- Initialize with a non-deterministic value
-    σ' = writeAssign (initMem σ ndv a) [Sum.inr { addr := a, offset := 0 }] v →
+    -- Initialize with an uninitialized memory cell
+    σ' = writeAssign (initMem σ a) (some [Sum.inr { addr := a, offset := 0 }]) v →
     StmtReach (Stmt.alloca v τ) σ σ'
 
   -- FIXME
   | store {p} (v₁ : Var) (τ₁ : IRTypeSyntax) (v₂ : Var) (τ₂ : IRTypeSyntax)
       (σ σ' : State) (val val' : Val)  :
-    σ.assign v₂ = [Sum.inr p] →
+    σ.assign v₂ = some [Sum.inr p] →
     σ.assign v₁ = val →
     val' = truncValRight p.offset val →
-    σ' = writeMem σ val' p.addr →
+    σ' = writeMem σ val' p →
     StmtReach (Stmt.store v₁ τ₁ v₂ τ₂) σ σ'
 
   -- FIXME
   | load {p} (v₁ : Var) (τ₁ : IRTypeSyntax) (v₂ : Var) (τ₂ : IRTypeSyntax)
       (σ σ' : State) (val val' : Val) :
-    σ.assign v₂ = [Sum.inr p] →
-    σ.mem p.addr = some val →
+    σ.assign v₂ = some [Sum.inr p] →
+    σ.mem p.addr = val →
     val' = truncValRight p.offset val →
     σ' = writeAssign σ val' v₁ →
     StmtReach (Stmt.load v₁ τ₁ v₂ τ₂) σ σ'
@@ -190,20 +174,20 @@ inductive StmtReach : Stmt → State → State → Prop where
   -- FIXME
   | gep {p} (v₁ : Var) (τs : IRTypeSyntax) (v₂ : Var) (τ₂ : IRTypeSyntax)
       (i : Nat) (σ σ' : State) (val val' : Val) :
-    σ.assign v₂ = [Sum.inr p] →
-    σ.mem p.addr = some val →
+    σ.assign v₂ = some [Sum.inr p] →
+    σ.mem p.addr = val →
     val' = truncValRight i val →
     σ' = writeAssign σ val' v₁ →
     StmtReach (Stmt.gep v₁ τs v₂ τ₂ i) σ σ'
 
   -- FIXME
   | gepv {p} (v₁ : Var) (τs : IRTypeSyntax) (v₂ : Var) (τ₂ : IRTypeSyntax)
-      (vi : Var) (σ σ' : State) (a : Addr) (i : Int) (val val' : Val) :
-    σ.assign v₂ = [Sum.inr p] →
-    σ.assign vi = [Sum.inl i] →
-    σ.mem p.addr = some val →
+      (vi : Var) (σ σ' : State) (a : Addr) (i : Int) (val val' : Val) (posh : 0 ≤ i) :
+    σ.assign v₂ = some [Sum.inr p] →
+    σ.assign vi = some [Sum.inl i] →
+    σ.mem p.addr = val →
     i ≥ 0 →
-    val' = truncValRight (Nat.ofInt i) val →
+    val' = truncValRight i.toNat val →
     σ' = writeAssign σ val' v₁ →
     StmtReach (Stmt.gepv v₁ τs v₂ τ₂ vi) σ σ'
 
