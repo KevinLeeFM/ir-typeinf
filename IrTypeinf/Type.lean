@@ -50,6 +50,12 @@ inductive LeSyntax : IRTypeSyntax → IRTypeSyntax → Prop where
   | sum_assoc_r (t₁ t₂ t₃ : IRTypeSyntax) :
       LeSyntax (.sum t₁ (.sum t₂ t₃)) (.sum (.sum t₁ t₂) t₃)
 
+  -- algebraic laws for product: associativity
+  | prod_assoc_l (t₁ t₂ t₃ : IRTypeSyntax) :
+      LeSyntax (.prod (.prod t₁ t₂) t₃) (.prod t₁ (.prod t₂ t₃))
+  | prod_assoc_r (t₁ t₂ t₃ : IRTypeSyntax) :
+      LeSyntax (.prod t₁ (.prod t₂ t₃)) (.prod (.prod t₁ t₂) t₃)
+
   -- distributivity of product over sum, both directions
   | prod_dist_l₁ (t₁ t₂ t₃ : IRTypeSyntax) :
       LeSyntax (.prod t₁ (.sum t₂ t₃)) (.sum (.prod t₁ t₂) (.prod t₁ t₃))
