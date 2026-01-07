@@ -39,7 +39,7 @@ inductive LeSyntax : IRTypeSyntax → IRTypeSyntax → Prop where
       LeSyntax t₁ t₁' → LeSyntax t₂ t₂' →
       LeSyntax (.sum t₁ t₂) (.sum t₁' t₂')
 
-  -- algebraic laws for sum: commutativity + associativity (both directions)
+  -- algebraic laws for sum: commutativity + associativity (both directions), and idempotence
   | sum_comm_l (t₁ t₂ : IRTypeSyntax) :
       LeSyntax (.sum t₁ t₂) (.sum t₂ t₁)
   | sum_comm_r (t₁ t₂ : IRTypeSyntax) :
@@ -49,6 +49,11 @@ inductive LeSyntax : IRTypeSyntax → IRTypeSyntax → Prop where
       LeSyntax (.sum (.sum t₁ t₂) t₃) (.sum t₁ (.sum t₂ t₃))
   | sum_assoc_r (t₁ t₂ t₃ : IRTypeSyntax) :
       LeSyntax (.sum t₁ (.sum t₂ t₃)) (.sum (.sum t₁ t₂) t₃)
+
+-- for idempotence, only one direction needs to be axiomatic to generate the equivalence
+  -- other direction is derivable via sum with bot rules
+  | sum_idem_l (t : IRTypeSyntax) :
+      LeSyntax (.sum t t) t
 
   -- algebraic laws for product: associativity
   | prod_assoc_l (t₁ t₂ t₃ : IRTypeSyntax) :
