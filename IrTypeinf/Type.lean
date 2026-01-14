@@ -84,6 +84,12 @@ inductive LeSyntax : IRTypeSyntax → IRTypeSyntax → Prop where
   | seq_absorb_r (t : IRTypeSyntax) :
       LeSyntax (.seq t) (.prod t (.seq t))
 
+  -- seq idempotence
+| seq_seq_l (t : IRTypeSyntax) :
+      LeSyntax (.seq (.seq t)) (.seq t)
+  | seq_seq_r (t : IRTypeSyntax) :
+      LeSyntax (.seq t) (.seq (.seq t))
+
   -- "typing-ish" rules:
   | seq_intro (t : IRTypeSyntax) :
       LeSyntax t (.seq t)
